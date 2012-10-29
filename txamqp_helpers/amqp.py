@@ -94,7 +94,7 @@ class AmqpProtocol(AMQClient):
         if self.connected:
             while len(self.factory.queued_messages) > 0:
                 m, kw = self.factory.queued_messages.pop(0)
-                self._send_message(m[0], m[1], m[2], **kw)
+                self._send_message(m[0], m[1], m[2], m[3], **kw)
 
 
     # Do all the work that configures a listener.
@@ -134,7 +134,7 @@ class AmqpProtocol(AMQClient):
 
 
     @inlineCallbacks
-    def _send_message(self, exchange, routing_key, msg,
+    def _send_message(self, exchange, routing_key, msg, deferred,
                       type="direct", durable=True, auto_delete=False):
         """Send a single message."""
         # First declare the exchange just in case it doesn't exist.
@@ -144,6 +144,7 @@ class AmqpProtocol(AMQClient):
         msg["delivery mode"] = 2 # 2 = persistent delivery.
         d = self.chan.basic_publish(exchange=exchange, routing_key=routing_key, content=msg)
         d.addErrback(self._send_message_err)
+        d.chainDeferred(deferred)
 
 
     def _send_message_err(self, error):
@@ -219,12 +220,16 @@ class AmqpFactory(protocol.ReconnectingClientFactory):
     def send_message(self, exchange, routing_key, msg, **kw):
         """Send a message."""
         # Add the new message to the queue.
-        self.queued_messages.append(((exchange, routing_key, msg), kw))
+        d = Deferred()
+        self.queued_messages.append(((exchange, routing_key, msg, d), kw))
 
         # This tells the protocol to send all queued messages.
         if self.p != None:
             self.p.send()
 
+        # To handle when messages has been pushed into amqp network
+        # Returns a Deferred object
+        return d
 
     def read(self, exchange=None, routing_key=None, callback=None):
         """Configure an exchange to be read from."""
